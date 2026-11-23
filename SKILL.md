@@ -71,7 +71,7 @@ python scripts/run_skill.py --case /input/case.json --out /app/output/result.jso
 示例输入（示意）：`entities` 含受体 A（protein, membrane）与激酶 B（protein, cytoplasm），`relations` 一条 activation。示例输出（示意）：`status="success"`，`edges[0].arrowhead="solid_arrow"`，`pathway_order.layers` 为两层。仅为示例，不代表官方固定案例结果。
 
 
-## 交付保证与评分对齐
+## 执行保证与评分对齐
 
 调用顺序（固定）：
 
@@ -93,16 +93,8 @@ python scripts/run_skill.py --case /input/case.json --out /app/output/result.jso
 - 可靠体验（10）：异常输入有明确降级与说明，不同长度/文体/重复运行下稳定产出。
 - 生态贡献（10）：用途、调用、输入输出、限制、示例、维护信息齐全，资源可被他人复用。
 
-### 真实图稿与预览（本次必做）
+### 真实图稿与预览（本 Cycle 必做）
 
 - 脚本只输出规格（如 `editable_source.produced=false`）时，调用 Agent 必须依据规格真实写出可编辑 SVG 到 `/app/output/`：实体、区室、边、箭头、标签、图例均为可编辑元素。
 - 任务要求 PNG/PDF 或需要人工核看时，必须实际渲染预览文件；环境无栅格化工具时以真实 SVG 作为矢量预览，并在 `result.json` 写明格式、路径与原因。
 - 仅当文件真实落盘、可打开并核对后，才将 `editable_source.produced` 与 `export_plan[].performed` 置 `true`，并写入路径、字节数与 SHA-256；未执行的检查项如实写 `false` 与原因，不伪造渲染或检查结果。
-
-## 最终交付强制要求
-
-1. **调用 Agent 必须交付成品，不是流程说明**：脚本产出只是索引、核对或规格骨架；调用 Agent 必须在同一 `result.json` 中补齐本题要求的最终产物（正文/译文/审稿意见/综述/分析结论/图表源文件与导出件/幻灯片页内容与讲稿/实验方案等）。交付字段为空、只有标题骨架，或含 `pending`、`TODO` 之类占位，一律视为未完成。
-2. **必须覆盖全部输入条目**：输入中的每个章节、问题、文献、图、页面、指标都要有对应条目，不得只处理示例或首条；确实缺失的条目写入 `uncertainty` / `limitations` 并说明原因，不得静默跳过。
-3. **必须自检后再交付**：`case_id` 与输入一致；`output_contract` 每个字段都存在；状态值取本题契约规定的枚举；数字、单位、引用、来源可逐条回溯；结果内部无自相矛盾。
-4. **参数等价**：`python scripts/run_skill.py --case <输入> --out <输出>` 与 `--output <输出>` 等价；默认 `/input/case.json` → `/app/output/result.json`。
-5. **平台用 3 个固定案例分别运行**：逻辑要由输入驱动，不针对某一份示例硬编码；字段命名差异走别名匹配与显式降级，并在 `uncertainty` 记录假设。
