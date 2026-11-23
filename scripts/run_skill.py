@@ -442,7 +442,7 @@ def build_export_plan(case):
 def main():
     parser = argparse.ArgumentParser(description="Biological mechanism pathway diagrammer")
     parser.add_argument("--case", default=DEFAULT_CASE)
-    parser.add_argument("--out", "--output", default=DEFAULT_OUT)
+    parser.add_argument("--out", "--output", dest="out", default=DEFAULT_OUT)
     parser.add_argument("--work", default=DEFAULT_WORK)
     args = parser.parse_args()
 
