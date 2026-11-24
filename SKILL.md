@@ -28,7 +28,7 @@ description: Use when biological entities and their regulatory interactions must
 4. **区室与拓扑**：按文本与显式字段给实体分配区室（胞外、膜、胞质、细胞核、线粒体等）；按关系方向计算上游—下游层级，识别分支与反馈环。
 5. **图例与编码**：为每种关系类型生成线型、箭头、颜色图例；若存在数值编码（表达量、显著性、置信度），生成视觉通道映射并标注数据来源。
 6. **一致性校验**：悬空端点、自环、基因/蛋白同名混用、区室缺失、方向缺失、反馈环、图例缺项、编码无数据来源。
-7. **导出计划**：登记目标格式与检查项，`performed=false`。
+7. **导出与绘图**：实际写出 `figure.svg` 与 `figure-spec.json`；SVG 项 `performed=true` 并记录字节数/SHA-256，PNG/PDF 未执行则如实 `false`。
 8. **契约落盘**：保留 `case_id` 与全部 `output_contract` 字段。
 
 ## 评分维度对应
@@ -56,11 +56,11 @@ description: Use when biological entities and their regulatory interactions must
 | 受体区室未知 | 不硬放膜上 | 标 `compartment_unknown`，保留占位 |
 | 数值编码无来源 | 不生成色阶 | 标 `encoding_without_source` |
 | 存在反馈环 | 保留并按环标注 | `pathway_order.feedback_loops` |
-| 渲染工具缺失 | 只给导出计划 | `export_plan[].performed=false` |
+| PNG/PDF 渲染工具缺失 | 仅栅格/PDF 只给导出计划 | SVG `performed=true`；其余 `export_plan[].performed=false` |
 
 ## 限制
 
-区室与方向主要来自显式字段和有限文本线索；跨句指代、通路数据库 ID 映射与亚细胞定位证据不在本 Skill 范围内。布局为约束规格，不是最终像素。
+区室与方向主要来自显式字段和有限文本线索；跨句指代、通路数据库 ID 映射与亚细胞定位证据不在本 Skill 范围内。`figure.svg` 由确定性布局直接写出；PNG/PDF 预览未渲染。
 
 ## 最小调用示例（示例，非官方案例结果）
 
@@ -70,6 +70,17 @@ python scripts/run_skill.py --case /input/case.json --out /app/output/result.jso
 
 示例输入（示意）：`entities` 含受体 A（protein, membrane）与激酶 B（protein, cytoplasm），`relations` 一条 activation。示例输出（示意）：`status="success"`，`edges[0].arrowhead="solid_arrow"`，`pathway_order.layers` 为两层。仅为示例，不代表官方固定案例结果。
 
+
+## Quickstart
+
+在包根目录执行：
+
+```bash
+python scripts/run_skill.py --case examples/demo-case/case.json --out ./demo-output/result.json
+```
+
+- 演示案例：`examples/demo-case/case.json`（合成信号通路：5 个实体、4 条关系；纯合成，不代表真实通路）。
+- 输出：`result.json`、`figure.svg`（区室横带 + 定向箭头 + 关系标签）与 `figure-spec.json`；每个节点/边带 `文件:pX.sY` 锚点，`exports`/`provenance_and_changes`/`compliance_checks`/`content_map`/`exceptions` 均为真实内容。
 
 ## 执行保证与评分对齐
 
