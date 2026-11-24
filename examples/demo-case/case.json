@@ -1,0 +1,16 @@
+{
+  "case_id": "demo-pathway-001",
+  "task_instruction": "Build an editable mechanism diagram with labelled compartments and typed arrows.",
+  "materials": ["material.md"],
+  "output_contract": {
+    "editable_source": "layered editable source file",
+    "exports": "exported SVG with element checks",
+    "provenance_and_changes": "element -> source sentence mapping and change record",
+    "case_id": "",
+    "compliance_checks": "",
+    "content_map": "",
+    "exceptions": "",
+    "export_artifact": "",
+    "status": ""
+  }
+}
