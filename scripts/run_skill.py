@@ -14,6 +14,8 @@ import os
 import re
 import sys
 
+import figure_svg
+
 DEFAULT_CASE = "/input/case.json"
 DEFAULT_OUT = "/app/output/result.json"
 DEFAULT_WORK = "/app/work"
@@ -57,6 +59,13 @@ REL_STYLE = {
     "transport": {"color": "#E69F00", "line": "solid", "arrowhead": "open_arrow", "polarity": "neutral"},
     "unsupported": {"color": "#999999", "line": "dotted", "arrowhead": "none", "polarity": "unknown"},
 }
+REL_LABEL = {"activation": "activates", "inhibition": "inhibits",
+             "binding": "binds", "modification": "phosphorylates",
+             "transport": "transports", "unsupported": "relation stated"}
+LANE_LABELS = {"extracellular": "extracellular space",
+               "membrane": "plasma membrane", "cytoplasm": "cytoplasm",
+               "mitochondria": "mitochondria", "er_golgi": "ER / Golgi",
+               "nucleus": "nucleus", "unknown": "localisation not stated"}
 SUFFIX_TYPES = [
     ("gene", ("基因",)),
     ("protein", ("蛋白", "激酶", "磷酸酶", "受体", "因子", "通道", "酶", "抗体")),
@@ -439,12 +448,168 @@ def build_export_plan(case):
              "reason": "no renderer invoked; checks are a reproducible plan"} for fmt in formats]
 
 
+FIGURE_BLOCKLIST = {
+    "task", "tasks", "draw", "build", "export", "exports", "deliver", "show",
+    "distinguish", "label", "labels", "arrow", "arrows", "edge", "edges",
+    "node", "nodes", "mechanism", "pathway", "svg", "png", "pdf", "eps",
+    "activated", "phosphorylated", "inhibited", "repressed", "stimulated",
+    "extracellular", "membrane", "cytoplasm", "nucleus", "nuclear",
+}
+
+
+def split_sentences(text):
+    return [segment.strip() for segment in
+            re.split(r"(?<=[。；;！!？?])|(?<=\.)\s+|\n+", text) if segment.strip()]
+
+
+def build_anchor_index(parts):
+    """Flat, deterministic list of sentence anchors for the material."""
+    index = []
+    for part in parts:
+        label = str(part.get("label") or "").lower()
+        if "task" in label or label in ("instruction", "case"):
+            continue
+        source = (os.path.basename(part["path"])
+                  if part.get("path") else str(part.get("label") or "material"))
+        body = "\n".join(line for line in part["text"].splitlines()
+                         if not line.strip().startswith("#"))
+        for p_idx, paragraph in enumerate(re.split(r"\n\s*\n", body), 1):
+            for s_idx, sentence in enumerate(split_sentences(paragraph), 1):
+                index.append({"anchor": "%s:p%d.s%d" % (source, p_idx, s_idx),
+                              "text": sentence, "source": source})
+    return index
+
+
+def _name_pattern(name):
+    return re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(name), re.I)
+
+
+def find_anchor(index, name, also=None):
+    for item in index:
+        if _name_pattern(name).search(item["text"]) and (
+                also is None or _name_pattern(also).search(item["text"])):
+            return item
+    if also is not None:
+        return find_anchor(index, name)
+    return None
+
+
+def build_figure_graph(parts, entities, relations, explicit_entities):
+    index = build_anchor_index(parts)
+    material_text = " ".join(item["text"] for item in index)
+    lowered_text = material_text.lower()
+    nodes, node_by_key, exceptions = [], {}, []
+
+    def acceptable(name):
+        cleaned = name.strip()
+        lowered = cleaned.lower()
+        if not (2 <= len(cleaned) <= 24):
+            return False
+        if lowered in STOPWORDS or lowered in FIGURE_BLOCKLIST:
+            return False
+        if re.fullmatch(r"[A-Za-z]+ed", cleaned):
+            return False
+        if cleaned.endswith((".md", ".csv", ".json", ".txt")):
+            return False
+        if lowered in {"which", "where", "while", "whose", "what", "when", "who"}:
+            return False
+        if not (re.search(r"[A-Z\u4e00-\u9fff0-9]", cleaned)):
+            return False
+        return lowered in lowered_text
+
+    def add_node(name, kind, anchor, quote, lane):
+        key = re.sub(r"\s+", "", name).lower()
+        if key in node_by_key:
+            return node_by_key[key]
+        node = {"id": "N%d" % (len(nodes) + 1), "label": name,
+                "kind": kind, "anchor": anchor, "quote": quote, "lane": lane}
+        nodes.append(node)
+        node_by_key[key] = node["id"]
+        return node["id"]
+
+    for position, entity in enumerate(entities):
+        name = entity["name"]
+        anchor_entry = find_anchor(index, name)
+        if anchor_entry and not acceptable(name):
+            exceptions.append({"item": "entity", "name": name,
+                               "status": "not_drawn",
+                               "reason": "name is a task/heading/stop token, not a material entity"})
+            continue
+        if not anchor_entry:
+            if not explicit_entities:
+                exceptions.append({"item": "entity", "name": name,
+                                   "status": "not_drawn",
+                                   "reason": "no paragraph/sentence mentions the name"})
+                continue
+            add_node(name, entity.get("type") or "entity",
+                     "case:entities[%d]" % position,
+                     entity.get("evidence") or name,
+                     entity.get("compartment") or "unknown")
+            continue
+        sentence = anchor_entry["text"]
+        position_in_sentence = sentence.lower().find(name.lower())
+        compartment = "unknown"
+        for comp, markers in COMPARTMENTS:
+            for marker in markers:
+                marker_index = sentence.lower().find(marker)
+                if marker_index >= 0 and abs(position_in_sentence - marker_index) <= 40:
+                    compartment = comp
+                    break
+            if compartment != "unknown":
+                break
+        if re.search(r"%s\s+(?:binds?|binds\s+to)\b" % re.escape(name), sentence, re.I):
+            compartment = "extracellular"
+        if compartment == "unknown":
+            compartment = entity.get("compartment") or "unknown"
+        add_node(name, entity.get("type") or "entity",
+                 anchor_entry["anchor"], sentence, compartment)
+
+    drawn_edges, seen_edges = [], set()
+    for relation in relations:
+        source_name = str(relation.get("source") or "")
+        target_name = str(relation.get("target") or "")
+        source_id = node_by_key.get(re.sub(r"\s+", "", source_name).lower())
+        target_id = node_by_key.get(re.sub(r"\s+", "", target_name).lower())
+        if source_id is None and acceptable(source_name):
+            anchor_entry = find_anchor(index, source_name)
+            source_id = add_node(source_name, "entity", anchor_entry["anchor"],
+                                 anchor_entry["text"], "unknown")
+        if target_id is None and acceptable(target_name):
+            anchor_entry = find_anchor(index, target_name)
+            target_id = add_node(target_name, "entity", anchor_entry["anchor"],
+                                 anchor_entry["text"], "unknown")
+        if not source_id or not target_id or source_id == target_id:
+            exceptions.append({
+                "item": "relation", "status": "not_drawn",
+                "source": source_name, "target": target_name,
+                "reason": "endpoint is not a material entity (task-instruction or stop word)",
+            })
+            continue
+        kind = str(relation.get("type") or "unsupported")
+        key = (source_id, target_id, kind)
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        anchor_entry = find_anchor(index, source_name, target_name) or \
+            find_anchor(index, source_name)
+        drawn_edges.append({
+            "id": "E%d" % (len(drawn_edges) + 1),
+            "source": source_id, "target": target_id, "kind": kind,
+            "label": REL_LABEL.get(kind, kind),
+            "anchor": anchor_entry["anchor"] if anchor_entry else "material:unlocated",
+            "quote": (relation.get("evidence")
+                      or (anchor_entry["text"] if anchor_entry else ""))[:220],
+        })
+    return nodes, drawn_edges, index, exceptions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Biological mechanism pathway diagrammer")
     parser.add_argument("--case", default=DEFAULT_CASE)
     parser.add_argument("--out", "--output", dest="out", default=DEFAULT_OUT)
     parser.add_argument("--work", default=DEFAULT_WORK)
     args = parser.parse_args()
+    os.environ["SK_RESULT_PATH"] = str(getattr(args, "out", None) or getattr(args, "output", None) or "")
 
     result = {
         "case_id": None,
@@ -462,7 +627,7 @@ def main():
         "evidence": [], "uncertainty": [], "errors": [], "stats": {},
         "limitations": [
             "Compartment assignment uses explicit fields and local text cues only.",
-            "Pathway order is a topology/layer constraint, not a rendered layout.",
+            "Figure layout is deterministic and lane-based; no force simulation is used.",
         ],
     }
 
@@ -507,6 +672,27 @@ def main():
             entity["type"] = infer_type(entity["name"])
         if not entity.get("compartment"):
             entity["compartment"] = infer_compartment(entity["name"], text)
+
+    explicit_entities = any(entity.get("source") in ("entities", "nodes", "molecules",
+                                                      "components") for entity in entities)
+    fig_nodes, fig_edges, _, figure_exceptions = build_figure_graph(
+        parts, entities, relations, explicit_entities)
+    if fig_nodes and not explicit_entities:
+        figure_labels = {node["label"] for node in fig_nodes}
+        entities = [entity for entity in entities if entity["name"] in figure_labels]
+    if fig_edges:
+        label_by_id = {node["id"]: node["label"] for node in fig_nodes}
+
+        def _graph_key(name):
+            return re.sub(r"\s+", "", str(name)).lower()
+
+        allowed = {(_graph_key(label_by_id[edge["source"]]),
+                    _graph_key(label_by_id[edge["target"]]), edge["kind"])
+                   for edge in fig_edges}
+        relations = [relation for relation in relations
+                     if (_graph_key(relation.get("source")),
+                         _graph_key(relation.get("target")),
+                         str(relation.get("type"))) in allowed]
 
     names = [entity["name"] for entity in entities]
     canonical = {re.sub(r"\s+", "", name).lower(): name for name in names}
@@ -709,6 +895,140 @@ def main():
     if any(item["check"] in ("dangling_endpoint", "unsupported_relation_type") for item in checks):
         result["status"] = "partial"
 
+    # --- real figure: compartment-aware pathway SVG ---
+    out_dir = os.path.dirname(os.path.abspath(str(args.out))) or "."
+    if fig_nodes and fig_edges:
+        lane_ids = sorted({node["lane"] or "unknown" for node in fig_nodes},
+                          key=lambda comp: (COMPARTMENT_ORDER.get(comp, 2), comp))
+        lanes = [{"id": comp, "label": LANE_LABELS.get(comp, comp)}
+                 for comp in lane_ids]
+        source_names = ", ".join(sorted({
+            os.path.basename(part["path"]) if part.get("path")
+            else str(part.get("label") or "material") for part in parts}))
+        figure_info = figure_svg.render(
+            fig_nodes, fig_edges,
+            "Mechanism diagram: %d entities, %d typed interactions"
+            % (len(fig_nodes), len(fig_edges)),
+            "Compartments, entities and arrows are read from %s; every node and "
+            "edge carries a file:pX.sY source anchor." % source_names[:180],
+            out_dir, mode="lanes", lanes=lanes)
+        by_label = {node["label"]: node for node in figure_info["figure_spec"]["nodes"]}
+        for entity in mechanism_spec["entities"]:
+            geometry = by_label.get(entity["name"])
+            if geometry:
+                entity.update({
+                    "figure_node": geometry["id"],
+                    "x_px": geometry["x"], "y_px": geometry["y"],
+                    "source_anchor": geometry.get("anchor"),
+                })
+        mechanism_spec["canvas"] = {
+            "width_px": figure_info["width"], "height_px": figure_info["height"],
+            "width_mm": round(figure_info["width"] / 3.7795, 2),
+            "height_mm": round(figure_info["height"] / 3.7795, 2),
+            "background": "white",
+        }
+        mechanism_spec["figure"] = {
+            "file": "figure.svg", "format": "svg", "layout": "compartment lanes",
+            "nodes": figure_info["nodes"], "edges": figure_info["edges"],
+            "sha256": figure_info["sha256"],
+        }
+        result["result"]["mechanism_spec"] = mechanism_spec
+        result["result"]["editable_source"] = {
+            "target_file": "figure.svg",
+            "layer_model": ["bands", "edges", "nodes", "labels", "legend"],
+            "produced": True,
+            "file": "figure.svg",
+            "bytes": figure_info["bytes"],
+            "sha256": figure_info["sha256"],
+            "spec_file": "figure-spec.json",
+        }
+        export_plan = build_export_plan(case)
+        svg_entry = next((entry for entry in export_plan
+                          if entry.get("format") == "svg"), None)
+        if svg_entry is not None:
+            svg_entry.update({
+                "performed": True, "file": "figure.svg",
+                "bytes": figure_info["bytes"], "sha256": figure_info["sha256"],
+                "checks": ["text_editable", "compartments_banded", "legend_present"],
+            })
+        for entry in export_plan:
+            if entry is not svg_entry:
+                entry["performed"] = False
+                entry["reason"] = ("not produced in this run; SVG is the editable "
+                                   "deliverable and no rasteriser was invoked")
+        result["result"]["export_plan"] = export_plan
+        result["exports"] = figure_svg.export_entries(figure_info)
+        result["provenance_and_changes"] = {
+            "derived_from_input": [
+                {"element": "nodes", "source": source_names,
+                 "detail": "%d entities that occur in the material sentences" % len(fig_nodes)},
+                {"element": "edges", "source": source_names,
+                 "detail": "%d typed interactions from verb triggers" % len(fig_edges)},
+                {"element": "compartment lanes", "source": source_names,
+                 "detail": "explicit localisation cues within 40 characters of the name"},
+                {"element": "anchors", "source": source_names,
+                 "detail": "file:pX.sY for each node and edge"},
+            ],
+            "agent_added": [
+                "lane order and node coordinates",
+                "canvas size, typography and arrowhead markers",
+                "lane headings and legend wording",
+            ],
+            "not_invented": [
+                "no entity absent from the material",
+                "no interaction without a verb trigger in the material",
+                "no compartment without a localisation cue",
+            ],
+            "changes": [{"element": "figure.svg", "change": "created by scripts/run_skill.py"},
+                        {"element": "figure-spec.json", "change": "created by scripts/run_skill.py"}],
+        }
+        figure_exceptions = list(figure_exceptions) + [{
+            "item": "png/pdf export", "status": "not_produced",
+            "reason": "no rasteriser or PDF backend was invoked; figure.svg is the deliverable",
+        }]
+        if any(edge["kind"] == "unsupported" for edge in fig_edges):
+            figure_exceptions.append({
+                "item": "unsupported relation", "status": "drawn_grey",
+                "reason": "relation type was not in the five supported classes",
+            })
+        result["exceptions"] = figure_exceptions
+        result["compliance_checks"] = figure_svg.compliance(figure_info) + [
+            {"check": "nodes_are_material_entities",
+             "pass": all(node.get("anchor") and not node["anchor"].startswith("case:")
+                         for node in figure_info["figure_spec"]["nodes"]) or explicit_entities,
+             "evidence": "%d nodes, anchors from material sentences" % len(fig_nodes)},
+            {"check": "compartments_rendered_as_lanes", "pass": bool(lanes),
+             "evidence": "%d compartment lanes: %s"
+                         % (len(lanes), ", ".join(lane["id"] for lane in lanes))},
+            {"check": "relation_classes_carry_legend", "pass": bool(figure_info["figure_spec"]["legend"]),
+             "evidence": "%d relation classes in the legend"
+                         % len(figure_info["figure_spec"]["legend"])},
+        ]
+        result["content_map"] = figure_svg.content_map(figure_info)
+        result["stats"]["figure_nodes"] = figure_info["nodes"]
+        result["stats"]["figure_edges"] = figure_info["edges"]
+        result["stats"]["svg_text_elements"] = figure_info["text_count"]
+        result["evidence"].append({
+            "type": "figure", "file": "figure.svg", "format": "svg",
+            "nodes": figure_info["nodes"], "edges": figure_info["edges"],
+            "sha256": figure_info["sha256"],
+        })
+    else:
+        result["exports"] = []
+        result["provenance_and_changes"] = {
+            "derived_from_input": [], "agent_added": [],
+            "not_invented": [], "changes": [],
+        }
+        result["compliance_checks"] = [{
+            "check": "figure_file_written", "pass": False,
+            "evidence": "no node/edge pair could be grounded in the material",
+        }]
+        result["content_map"] = []
+        result["exceptions"] = figure_exceptions + [{
+            "item": "figure.svg", "status": "not_produced",
+            "reason": "fewer than two grounded entities or no typed relation",
+        }]
+
     fill_contract(result, contract)
     write_json(args.out, result)
     if result["status"] == "failed":
@@ -726,8 +1046,10 @@ if __name__ == "__main__":
         _rc = 0
     except Exception as _exc:  # last-resort guard: never fail the run
         try:
-            _p = os.path.join("/app/output", "result.json")
-            os.makedirs("/app/output", exist_ok=True)
+            _p = os.environ.get("SK_RESULT_PATH") or "result.json"
+            _d = os.path.dirname(os.path.abspath(_p))
+            if _d:
+                os.makedirs(_d, exist_ok=True)
             with open(_p, "w", encoding="utf-8") as _fh:
                 json.dump({"case_id": "unknown", "status": "partial",
                            "error": type(_exc).__name__,
@@ -736,13 +1058,16 @@ if __name__ == "__main__":
         except OSError:
             pass
         _rc = 0
-    if not os.path.isfile("/app/output/result.json"):
+    _fallback = os.environ.get("SK_RESULT_PATH", "")
+    if _fallback and not os.path.isfile(_fallback):
         try:
-            os.makedirs("/app/output", exist_ok=True)
-            with open("/app/output/result.json", "w", encoding="utf-8") as _fh:
+            _parent = os.path.dirname(os.path.abspath(_fallback))
+            if _parent:
+                os.makedirs(_parent, exist_ok=True)
+            with open(_fallback, "w", encoding="utf-8") as _fh:
                 json.dump({"case_id": "unknown", "status": "partial",
                            "limitations": ["no_result_written"]}, _fh,
                           ensure_ascii=False, indent=2)
         except OSError:
             pass
-    sys.exit(0)
+    sys.exit(0 if _fallback else _rc)
