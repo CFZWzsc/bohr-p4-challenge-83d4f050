@@ -43,7 +43,7 @@ description: Use when biological entities and their regulatory interactions must
 
 `/app/output/result.json` 顶层保留 `case_id`、`output_contract` 全部字段、`status`、`result`、`evidence`、`uncertainty`、`errors`、`stats`、`skill`、`challenge_id`、`contract_notes`。未支持字段写 `null` 并记录原因。
 
-主要交付段：`result.mechanism_spec.entities`、`result.mechanism_spec.edges`、`result.mechanism_spec.pathway_order`、`result.mechanism_spec.legend`、`result.consistency_checks`。
+主要交付段：`result.mechanism_spec.entities`、`result.mechanism_spec.edges`、`result.mechanism_spec.pathway_order`、`result.mechanism_spec.legend`、`result.consistency_checks`；机检产物 `svg_checks.json`、`edit_diff.json`、`gain_evidence.json`、`figure-edited.svg`。
 
 ## 异常处理
 
