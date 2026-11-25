@@ -28,7 +28,7 @@ description: Use when biological entities and their regulatory interactions must
 4. **区室与拓扑**：按文本与显式字段给实体分配区室（胞外、膜、胞质、细胞核、线粒体等）；按关系方向计算上游—下游层级，识别分支与反馈环。
 5. **图例与编码**：为每种关系类型生成线型、箭头、颜色图例；若存在数值编码（表达量、显著性、置信度），生成视觉通道映射并标注数据来源。
 6. **一致性校验**：悬空端点、自环、基因/蛋白同名混用、区室缺失、方向缺失、反馈环、图例缺项、编码无数据来源。
-7. **导出与绘图**：实际写出 `figure.svg` 与 `figure-spec.json`；SVG 项 `performed=true` 并记录字节数/SHA-256，PNG/PDF 未执行则如实 `false`。
+7. **导出与绘图**：实际写出 `figure.svg`、`figure.png`、`figure.pdf` 与 `figure-spec.json`；逐项记录字节数/SHA-256、渲染器与 dpi，未导出则如实 `false`。
 8. **契约落盘**：保留 `case_id` 与全部 `output_contract` 字段。
 
 ## 评分维度对应
@@ -56,11 +56,11 @@ description: Use when biological entities and their regulatory interactions must
 | 受体区室未知 | 不硬放膜上 | 标 `compartment_unknown`，保留占位 |
 | 数值编码无来源 | 不生成色阶 | 标 `encoding_without_source` |
 | 存在反馈环 | 保留并按环标注 | `pathway_order.feedback_loops` |
-| PNG/PDF 渲染工具缺失 | 仅栅格/PDF 只给导出计划 | SVG `performed=true`；其余 `export_plan[].performed=false` |
+| PNG/PDF 渲染工具缺失 | Pillow 缺失时用纯 Python 栅格兜底 | 记录 renderer/dpi；仍失败则 `performed=false` 并写明原因 |
 
 ## 限制
 
-区室与方向主要来自显式字段和有限文本线索；跨句指代、通路数据库 ID 映射与亚细胞定位证据不在本 Skill 范围内。`figure.svg` 由确定性布局直接写出；PNG/PDF 预览未渲染。
+区室与方向主要来自显式字段和有限文本线索；跨句指代、通路数据库 ID 映射与亚细胞定位证据不在本 Skill 范围内。`figure.svg` 由确定性布局直接写出，PNG/PDF 由同一图元树导出。
 
 ## 最小调用示例（示例，非官方案例结果）
 
@@ -107,5 +107,5 @@ python scripts/run_skill.py --case examples/demo-case/case.json --out ./demo-out
 ### 真实图稿与预览（本 Cycle 必做）
 
 - 脚本只输出规格（如 `editable_source.produced=false`）时，调用 Agent 必须依据规格真实写出可编辑 SVG 到 `/app/output/`：实体、区室、边、箭头、标签、图例均为可编辑元素。
-- 任务要求 PNG/PDF 或需要人工核看时，必须实际渲染预览文件；环境无栅格化工具时以真实 SVG 作为矢量预览，并在 `result.json` 写明格式、路径与原因。
+- PNG（300 dpi）与 PDF 由同一图元树真实导出，并记录渲染器与 dpi；无 Pillow 时退化为纯 Python 栅格预览，并在 `result.json` 写明原因。
 - 仅当文件真实落盘、可打开并核对后，才将 `editable_source.produced` 与 `export_plan[].performed` 置 `true`，并写入路径、字节数与 SHA-256；未执行的检查项如实写 `false` 与原因，不伪造渲染或检查结果。
