@@ -24,7 +24,9 @@ SKILL_VERSION = "1.0.0"
 CHALLENGE_ID = "challenge-83d4f050"
 MAX_TEXT = 400000
 SKIP_KEYS = {"output_contract", "scoring", "tags", "meta", "case_id",
-             "challenge_id", "skill", "contract_notes"}
+             "challenge_id", "skill", "contract_notes",
+             "task_instruction", "task", "instruction", "requirements",
+             "rubric", "prompt"}
 
 COMPARTMENTS = [
     ("extracellular", ("胞外", "细胞外", "extracellular", "secreted", "lumen")),
@@ -143,12 +145,18 @@ def task_text(base_dir):
     return "", None
 
 
-def infer_type(name):
+def infer_type(name, context=""):
     for kind, suffixes in SUFFIX_TYPES:
         if any(name.endswith(suffix) for suffix in suffixes):
             return kind
     if re.search(r"[A-Za-z]", name):
-        if name.isupper() or re.match(r"^[A-Z]{2,}[0-9]*$", name):
+        # Uppercase symbols alone are ambiguous (gene symbol or protein name);
+        # only claim 'gene' when the sentence says so.
+        window = ""
+        if context and name in context:
+            pos = context.find(name)
+            window = context[max(0, pos - 24): pos + len(name) + 24]
+        if re.search(r"基因|\bgene\b", window, re.IGNORECASE):
             return "gene"
         return "protein"
     return "entity"
@@ -207,7 +215,7 @@ def pick_entities(case, text):
         if key in seen or key in STOPWORDS:
             continue
         seen.add(key)
-        result.append({"name": name, "type": infer_type(name),
+        result.append({"name": name, "type": infer_type(name, text),
                        "compartment": infer_compartment(name, text), "source": "text"})
     return result
 
@@ -647,7 +655,9 @@ def main():
     contract = case.get("output_contract")
     parts, unreadable = collect_material(case, base_dir)
     extra_task, task_path = task_text(base_dir)
-    text = ("\n".join(part["text"] for part in parts) + "\n" + extra_task)[:MAX_TEXT]
+    # The task statement is never a content source: entities, relations and
+    # compartments must come from the material only.
+    text = "\n".join(part["text"] for part in parts)[:MAX_TEXT]
 
     entities = pick_entities(case, text)
     relations = pick_relations(case, text)
@@ -669,7 +679,7 @@ def main():
     entities = unique_entities
     for entity in entities:
         if not entity.get("type"):
-            entity["type"] = infer_type(entity["name"])
+            entity["type"] = infer_type(entity["name"], text)
         if not entity.get("compartment"):
             entity["compartment"] = infer_compartment(entity["name"], text)
 
@@ -951,11 +961,22 @@ def main():
                 "bytes": figure_info["bytes"], "sha256": figure_info["sha256"],
                 "checks": ["text_editable", "compartments_banded", "legend_present"],
             })
+        previews = {"png": figure_info.get("png"), "pdf": figure_info.get("pdf")}
         for entry in export_plan:
-            if entry is not svg_entry:
+            if entry is svg_entry:
+                continue
+            preview = previews.get(str(entry.get("format", "")).lower())
+            if preview:
+                entry.update({"performed": True, "file": preview["file"],
+                               "bytes": preview["bytes"],
+                               "sha256": preview["sha256"],
+                               "renderer": preview["renderer"],
+                               "dpi": preview["dpi"]})
+                entry.pop("reason", None)
+            else:
                 entry["performed"] = False
-                entry["reason"] = ("not produced in this run; SVG is the editable "
-                                   "deliverable and no rasteriser was invoked")
+                entry["reason"] = ("not produced in this run: no raster or PDF "
+                                   "backend was available")
         result["result"]["export_plan"] = export_plan
         result["exports"] = figure_svg.export_entries(figure_info)
         result["provenance_and_changes"] = {
@@ -982,10 +1003,12 @@ def main():
             "changes": [{"element": "figure.svg", "change": "created by scripts/run_skill.py"},
                         {"element": "figure-spec.json", "change": "created by scripts/run_skill.py"}],
         }
-        figure_exceptions = list(figure_exceptions) + [{
-            "item": "png/pdf export", "status": "not_produced",
-            "reason": "no rasteriser or PDF backend was invoked; figure.svg is the deliverable",
-        }]
+        figure_exceptions = list(figure_exceptions) + (
+            [] if (figure_info.get("png") and figure_info.get("pdf")) else [{
+                "item": "png/pdf export", "status": "not_produced",
+                "reason": figure_info.get("preview_log")
+                or "no raster or PDF backend available",
+            }])
         if any(edge["kind"] == "unsupported" for edge in fig_edges):
             figure_exceptions.append({
                 "item": "unsupported relation", "status": "drawn_grey",
