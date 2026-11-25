@@ -545,6 +545,10 @@ def build_figure_graph(parts, entities, relations, explicit_entities):
             continue
         if not anchor_entry:
             if not explicit_entities:
+                if re.fullmatch(r"[A-Z][A-Za-z0-9\-]{2,24}", name):
+                    # A bare title-cased token never mentioned in the material is a
+                    # heading, not a biological entity: skip it, do not draw it.
+                    continue
                 exceptions.append({"item": "entity", "name": name,
                                    "status": "not_drawn",
                                    "reason": "no paragraph/sentence mentions the name"})
